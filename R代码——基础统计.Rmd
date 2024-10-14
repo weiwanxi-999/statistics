@@ -1,0 +1,599 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code.
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+```{r}
+library(readxl)
+
+```
+
+```{r}
+
+df <- read_excel("E:/tight norm 问卷.xlsx")
+head(df)
+```
+
+# 一、测量学
+
+## （一）样本特性
+
+### 1.性别
+
+```{r}
+# 加载必要的包
+library(dplyr)
+
+# 定义总体女性比例
+population_female_proportion <- 0.49
+
+# 确保数据框已正确加载，并包含名为 Gender 的列
+# Gender 列中的值为 1 表示男性，0 表示女性
+
+# 计算样本总数和女性比例
+sample_size  <- sum(!is.na(df$Gender))
+sample_female_count <- sum(df$Gender == 0, na.rm = TRUE)
+sample_female_proportion <- sample_female_count / sample_size
+
+# 转换性别数据，其中女性为1，男性为0
+gender_numeric <- ifelse(df$Gender == 0, 1, 0)
+
+# 进行单样本t检验，比较样本中的女性比例与总体中的女性比例
+t_test_result <- t.test(gender_numeric, mu = population_female_proportion)
+
+# 输出检验结果
+print(t_test_result)
+```
+
+-   虽然样本均值（0.4798491）在置信区间内，但置信区间本身不包括总体比例0.49，这意味着样本中的女性比例与总体女性比例在统计上有显著差异。
+
+### 2.年龄
+
+```{r}
+# 加载必要的包
+library(dplyr)
+
+# 定义总体中位数
+population_median_age <- 37
+
+# 确保数据框已正确加载，并包含名为 Age 的列
+# 计算样本中的年龄中位数
+sample_median_age <- median(df$Age, na.rm = TRUE)
+
+# 进行单样本中位数检验（Wilcoxon Signed Rank 检验）
+wilcox_test_result <- wilcox.test(df$Age, mu = population_median_age, exact = FALSE)
+
+# 输出检验结果
+print(wilcox_test_result)
+```
+
+-   p值远小于0.05，这表明样本的中位数与总体中位数之间的差异在统计上非常显著。
+
+### 3.教育
+
+```{r}
+# 安装并加载plm包
+library(plm)
+
+
+# 将数据转换为面板数据格式
+# ProvinceNumber是省份编号，Round是轮次
+pdata <- pdata.frame(df, index = c("ProvinceNumber", "Round"))
+
+
+# 进行固定效应模型分析
+fe_model <- plm(tightness_individual ~ Education + Age + Living_Year, data = pdata, model = "within")
+
+summary(fe_model)
+```
+
+-   教育程度与人们对文化紧密度的看法之间没有显著关联，可以接受样本文化水平与总体人口教育水平之间的差异。
+
+## （二）量表一致性
+
+### 1.文化紧密度
+
+#### （1）Cronbach's alpha
+
+```{r}
+# 选择数据框中的第 3 列到第 8 列
+scale_data <- df[, 3:8]
+
+# 确保选择的列是数值型
+scale_data[] <- lapply(scale_data, as.numeric)
+
+
+# 计算 Cronbach's alpha，使用 check.keys=TRUE 选项
+alpha_result <- psych::alpha(scale_data, check.keys=TRUE)
+
+# 输出 Cronbach's alpha 值
+print(alpha_result$total$raw_alpha)
+```
+
+-   Cronbach’s alpha=0.71，量表有良好的信度。
+
+#### （2）省内一致性
+
+-   如果一个省份的居民在文化紧密度的感知上高度一致，这表明他们共享相似的文化体验和价值观。通过计算一致性，研究者可以验证他们的数据是否可靠，以及是否可以将个体的感知聚合为整个省份的代表性指标。
+
+```{r}
+# 载入数据
+scale_data <- df[, 3:8]
+province_data <- df$ProvinceNumber
+
+# 确保选择的列是数值型
+scale_data[] <- lapply(scale_data, as.numeric)
+
+# 量表的项目数 J (列数)
+J <- ncol(scale_data)
+# 量表的响应选项数 A
+A <- 6
+# 预期误差方差
+omega_u <- (A^2 - 1) / 12
+
+# 创建一个函数来计算 rwg(J)
+calc_rwg <- function(data) {
+  # 计算每个项目的方差
+  variances <- apply(data, 2, var)
+  # 对所有项目的方差求平均，得到 S2xj
+  S2xj <- mean(variances)
+  # 计算 rwg(J)
+  rwg <- (J * (1 - (S2xj / omega_u))) / (J * (1 - (S2xj / omega_u)) + (S2xj / omega_u))
+  return(rwg)
+}
+
+# 按省份分组计算 rwg(J)
+rwg_values <- tapply(1:nrow(scale_data), province_data, function(indices) {
+  calc_rwg(scale_data[indices, ])
+})
+
+# 转换 rwg_values 为数值型向量
+rwg_values <- as.numeric(rwg_values)
+
+# 输出 rwg 值
+print(rwg_values)
+
+# 计算 rwg 的平均数和中位数
+mean_rwg <- mean(rwg_values, na.rm = TRUE)
+median_rwg <- median(rwg_values, na.rm = TRUE)
+
+cat("Mean rwg:", mean_rwg, "\n")
+cat("Median rwg:", median_rwg, "\n")
+
+
+
+```
+
+-   都超过了rwg(j)=0.70的指标，省内一致性较高。
+
+#### （3）省内方差与省间方差
+
+```{r}
+# 安装并加载必要的包
+library(lme4)
+
+# 假设你的数据框是 df
+# ProvinceNumber 是省份列
+# tightness_individual 是文化紧密度列
+
+# 准备数据
+data <- df[, c("ProvinceNumber", "tightness_individual")]
+
+# 确保选择的列是数值型
+data$tightness_individual <- as.numeric(data$tightness_individual)
+data$ProvinceNumber <- as.factor(data$ProvinceNumber)
+
+# 计算 MSB 和 MSW
+anova_result <- aov(tightness_individual ~ ProvinceNumber, data = data)
+anova_summary <- summary(anova_result)
+
+# 提取 MSB 和 MSW
+MSB <- anova_summary[[1]]["ProvinceNumber", "Mean Sq"]
+MSW <- anova_summary[[1]]["Residuals", "Mean Sq"]
+
+# 计算每个省份的成员数
+member_counts <- table(df$ProvinceNumber)  # 统计每个省份的成员数
+
+# 计算平均成员数 k
+k <- mean(unname(member_counts))  # 求平均值，去掉名称（即省份编号）
+
+# 计算 ICC(1) 和 ICC(2)
+ICC1 <- (MSB - MSW) / (MSB + (k - 1) * MSW)
+ICC2 <- (MSB - MSW) / MSB
+
+cat("ICC(1):", ICC1, "\n")
+cat("ICC(2):", ICC2, "\n")
+
+# 提取 F 值、自由度和 p 值
+F_value <- anova_summary[[1]]["ProvinceNumber", "F value"]
+df_between <- anova_summary[[1]]["ProvinceNumber", "Df"]
+df_within <- anova_summary[[1]]["Residuals", "Df"]
+p_value <- anova_summary[[1]]["ProvinceNumber", "Pr(>F)"]
+
+cat("F (", df_between, ", ", df_within, ") = ", F_value, ", p = ", p_value, "\n", sep="")
+
+```
+
+-   省内差异显著小于省间差异
+-   省级均值具有较高的可靠性，能够有效代表不同省份对于文化紧密程度感知的差异
+
+### 2.其它项目
+
+```{r}
+df_socul <- read_excel("E:/[- -] C/高级统计/社会文化.xlsx")
+head(df_socul)
+```
+
+```{r}
+
+# 加载必要的包
+library(psych)
+
+# 定义一个函数来处理缺失值并计算Cronbach's alpha
+calculate_alpha <- function(data, columns) {
+  # 选择相关列
+  items <- data[, columns]
+  # 删除含有缺失值的行
+  items <- na.omit(items)
+  # 检查是否有足够的非缺失数据
+  if (ncol(items) > 1 && nrow(items) > 0) {
+    # 计算Cronbach's alpha
+    alpha_result <- alpha(items)
+    return(alpha_result$total$raw_alpha)
+  } else {
+    return(NA)
+  }
+}
+
+# 定义各量表的列
+relational_collectivism_columns <- c("relation_coll1r", "relation_coll2r", "relation_coll3r", "relation_coll4r")
+group_collectivism_columns <- c("collec1r", "collec3r", "collec4r")
+power_distance_columns <- c("pd1r", "pd2r", "pd3r", "pd5r")
+uncertainty_avoidance_columns <- c("ua1r", "ua2r", "ua3r", "ua4r")
+
+# 计算各量表的Cronbach's alpha
+relational_collectivism_alpha <- calculate_alpha(df_socul, relational_collectivism_columns)
+group_collectivism_alpha <- calculate_alpha(df_socul, group_collectivism_columns)
+power_distance_alpha <- calculate_alpha(df_socul, power_distance_columns)
+uncertainty_avoidance_alpha <- calculate_alpha(df_socul, uncertainty_avoidance_columns)
+
+# 打印结果
+cat("Relational Collectivism Alpha:", relational_collectivism_alpha, "\n")
+cat("Group Collectivism Alpha:", group_collectivism_alpha, "\n")
+cat("Power Distance Alpha:", power_distance_alpha, "\n")
+cat("Uncertainty Avoidance Alpha:", uncertainty_avoidance_alpha, "\n")
+
+
+```
+
+# 二、描述性统计
+
+## 1.各省份样本量
+
+```{r}
+# 假设 df 是一个数据框，并且 ProvinceNumber 是它的一个列
+province_counts <- table(df$ProvinceNumber)
+
+# 将 table 对象转换为数据框
+province_counts_df <- as.data.frame(province_counts)
+
+# 重命名列，使第一列是 ProvinceNumber，第二列是 sample size
+names(province_counts_df) <- c("ProvinceNumber", "SampleSize")
+
+# 查看转换后的统计结果
+print(province_counts_df)
+```
+
+## 2.参与者平均年龄（最大、最小值）
+
+```{r}
+library(dplyr)
+
+# 假定 df 是你的原始数据框，并且包含 ProvinceNumber 和 Age 这两列
+province_age_stats <- df %>%
+  group_by(ProvinceNumber) %>%
+  summarize(
+    Average_Age_Range = paste0(
+      round(mean(Age, na.rm = TRUE), 2),  # 保留两位小数
+      " (",
+      min(Age, na.rm = TRUE),
+      ", ",
+      max(Age, na.rm = TRUE),
+      ")"
+    )
+  )
+
+# 查看结果
+print(province_age_stats)
+```
+
+## 3.平均居住时间
+
+```{r}
+province_Living_Year_stats <- df %>%
+  group_by(ProvinceNumber) %>%
+  summarize(
+    Average_Living_Year = round(mean(Living_Year, na.rm = TRUE) , 2 ),
+  )
+
+# 查看结果
+print(province_Living_Year_stats)
+```
+
+## 4.性别比
+
+```{r}
+library(dplyr)
+
+province_gender_stats <- df %>%
+  group_by(ProvinceNumber) %>%
+  summarize(
+    Total = n(),
+    Male_Count = sum(Gender == 1, na.rm = TRUE),
+    Percentage_Male = round((Male_Count / Total) * 100, 2)  # 保留两位小数
+  ) %>%
+  select(ProvinceNumber, Percentage_Male)  # 选择 ProvinceNumber 和 Percentage_Male 两列
+
+# 查看结果
+print(province_gender_stats)
+```
+
+## 5.文化紧密度得分
+
+```{r}
+library(dplyr)
+
+# 计算每个省份的个人紧密度得分的平均值
+province_avg <- df %>%
+  group_by(ProvinceNumber) %>%
+  summarise(AvgTightness = mean(tightness_individual, na.rm = TRUE)) %>%
+  ungroup()
+
+# 计算 Z 分数并保留两位小数
+province_avg <- province_avg %>%
+  mutate(ZScore = round((AvgTightness - mean(AvgTightness, na.rm = TRUE)) / sd(AvgTightness, na.rm = TRUE), 2))
+
+# 在每个省份的 Z 分数基础上加 3 分
+province_avg <- province_avg %>%
+  mutate(Cultural_Tightness_Score = round(ZScore + 3, 2)) %>%
+  select(ProvinceNumber, Cultural_Tightness_Score)
+
+# 打印结果查看
+print(province_avg)
+
+
+```
+
+```{r}
+
+#表格
+
+# 加载dplyr包
+library(dplyr)
+
+# 确保所有的数据集都是数据框格式
+df_province_counts <- as.data.frame(province_counts_df)
+df_province_age_stats <- as.data.frame(province_age_stats)
+df_province_Living_Year_stats <- as.data.frame(province_Living_Year_stats)
+df_province_gender_stats <- as.data.frame(province_gender_stats)
+df_province_tightness <- as.data.frame(province_avg)
+
+# 使用left_join合并数据框
+result <- df_province_counts %>%
+  left_join(df_province_age_stats, by = "ProvinceNumber") %>%
+  left_join(df_province_Living_Year_stats, by = "ProvinceNumber") %>%
+  left_join(df_province_gender_stats, by = "ProvinceNumber") %>%
+  left_join(df_province_tightness, by = "ProvinceNumber")
+
+# 查看结果
+print(result)
+```
+
+```{r}
+
+library(openxlsx)
+```
+
+```{r}
+# 将result导出为Excel文件
+write.xlsx(result, file = "E:/[- -] C/高级统计/result.xlsx")
+```
+
+# 三、多层线性回归
+
+## （一）省级层面：与创新的关系
+
+### 1.计算2014和2017年各省份文化紧密度得分
+
+```{r}
+library(dplyr)
+
+# 计算 Round 1 的 Cultural_Tightness_Score
+province_avg_round1 <- df %>%
+  filter(Round == 1) %>%
+  group_by(ProvinceNumber) %>%
+  summarise(AvgTightness = mean(tightness_individual, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(ZScore = round((AvgTightness - mean(AvgTightness, na.rm = TRUE)) / sd(AvgTightness, na.rm = TRUE), 2)) %>%
+  mutate(Cultural_Tightness_Score = round(ZScore + 3, 2)) %>%
+  select(ProvinceNumber, Cultural_Tightness_Score) %>%
+  mutate(Round = "Round 1")
+
+# 计算 Round 2 和 3 合并后的 Cultural_Tightness_Score
+province_avg_round2_3 <- df %>%
+  filter(Round %in% c(2, 3)) %>%
+  group_by(ProvinceNumber) %>%
+  summarise(AvgTightness = mean(tightness_individual, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(ZScore = round((AvgTightness - mean(AvgTightness, na.rm = TRUE)) / sd(AvgTightness, na.rm = TRUE), 2)) %>%
+  mutate(Cultural_Tightness_Score = round(ZScore + 3, 2)) %>%
+  select(ProvinceNumber, Cultural_Tightness_Score) %>%
+  mutate(Round = "Round 2+3")
+
+# 合并 Round 1 和 Round 2+3 的结果
+final_province_avg <- bind_rows(province_avg_round1, province_avg_round2_3)
+
+# 打印结果查看
+print(final_province_avg)
+
+```
+
+```{r}
+write.xlsx(final_province_avg, file = "E:/[- -] C/高级统计/重新构建面板数据.xlsx")
+```
+
+### 2.Hausman检验
+
+```{r}
+library(readxl)
+
+df_merged <- read_excel("E:/[- -] C/高级统计/merged_output.xlsx")
+head(df_merged)
+```
+
+```{r}
+library(plm)
+```
+
+```{r}
+# 将数据设置为面板数据
+pdata <- pdata.frame(df_merged, index = c("ProvinceNumber", "Year"))
+
+```
+
+```{r}
+# 固定效应模型
+fe_model_invention <- plm(Invention_Patents ~ Cultural_Tightness_Score + GDP + R.D + Education.expenditure.ratio, data = pdata, model = "within")
+fe_model_utility <- plm(Utility_Model_Patent ~ Cultural_Tightness_Score + GDP + R.D + Education.expenditure.ratio, data = pdata, model = "within")
+
+```
+
+```{r}
+# 随机效应模型
+re_model_invention <- plm(Invention_Patents ~ Cultural_Tightness_Score + GDP + R.D + Education.expenditure.ratio, data = pdata, model = "random")
+re_model_utility <- plm(Utility_Model_Patent ~ Cultural_Tightness_Score + GDP + R.D + Education.expenditure.ratio, data = pdata, model = "random")
+
+```
+
+```{r}
+# Hausman 检验
+phtest(fe_model_invention, re_model_invention)
+phtest(fe_model_utility, re_model_utility)
+```
+
+-   由于 Hausman 检验的结果在两个模型中均显示 P 值显著小于 0.05，说明随机效应模型存在不一致性，因此选择固定效应模型来分析发明专利和实用新型专利数据更为适宜。
+
+### 3.固定效应模型
+
+```{r}
+library(plm)
+library(stargazer)
+```
+
+```{r}
+# 转换为面板数据框
+pdata <- pdata.frame(df_merged, index = c("ProvinceNumber", "Year"))
+```
+
+```{r}
+# 固定效应模型：发明专利
+fe_invention <- plm(Invention_Patents ~ Cultural_Tightness_Score + GDP + Population_Density + R.D + Education.expenditure.ratio, 
+                     data = pdata, model = "within")
+
+# 固定效应模型：实用新型专利
+fe_utility <- plm(Utility_Model_Patent ~ Cultural_Tightness_Score + GDP + Population_Density + R.D + Education.expenditure.ratio, 
+                  data = pdata, model = "within")
+
+```
+
+```{r}
+# 创建结果表格
+stargazer(fe_invention, fe_utility, type = "text", title = "回归结果",
+          covariate.labels = c("文化紧密度得分", "GDP", "人口密度","研究经费", "教育支出比例"),
+          dep.var.labels = c("发明专利", "实用新型专利"),
+          model.names = FALSE, no.space = TRUE, out = "regression_results.txt")
+
+```
+
+-   数据原因，产生与原文不同的错误结果，遂不对结果进行解读。
+
+## （二）个人层面：与人格、幸福感的关系
+
+```{r}
+library(lme4)
+library(stargazer)
+```
+
+```{r}
+df_LRGL <- read_excel("E:/[- -] C/高级统计/LRGL.xlsx")
+df_BF <- read_excel("E:/[- -] C/高级统计/BIGFIVE.xlsx")
+df_PANA <- read_excel("E:/[- -] C/高级统计/PANA.xlsx")
+```
+
+```{r}
+# 对多个变量运行多层线性模型
+# 加入控制变量的模型
+model_GovernenmentIntervention <- lmer(GovernenmentIntervention ~ tightness_individual + Age + Gender + Education + GDP_PC + (1 | ProvinceNumber), data = df_LRGL)
+model_LGBTTolerance <- lmer(LGBTTolerance ~ tightness_individual + Age + Gender + Education + GDP_PC + (1 | ProvinceNumber), data = df_LRGL)
+model_ReligiousActivity <- lmer(ReligiousActivity ~ tightness_individual + Age + Gender + Education + GDP_PC + (1 | ProvinceNumber), data = df_LRGL)
+model_Openness <- lmer(Openness ~ tightness_individual + Age + Gender  + GDP_PC + (1 | ProvinceNumber), data = df_BF)
+model_Agreeableness <- lmer(Agreeableness ~ tightness_individual + Age + Gender  + GDP_PC + (1 | ProvinceNumber), data = df_BF)
+model_Extraversion <- lmer(Extraversion ~ tightness_individual + Age + Gender  + GDP_PC + (1 | ProvinceNumber), data = df_BF)
+model_Neuroticism <- lmer(Neuroticism ~ tightness_individual + Age + Gender  + GDP_PC + (1 | ProvinceNumber), data = df_BF)
+model_conscientiousness <- lmer(conscientiousness ~ tightness_individual + Age + Gender  + GDP_PC + (1 | ProvinceNumber), data = df_BF)
+model_Self_monitoring <- lmer(Self_monitoring ~ tightness_individual + Age + Gender  + GDP_PC + (1 | ProvinceNumber), data = df_BF)
+model_Life_satisfaction <- lmer(Life_satisfaction ~ tightness_individual + Age + Gender + Education + GDP_PC + (1 | ProvinceNumber), data = df_LRGL)
+model_PA <- lmer(PA ~ tightness_individual + Age + Gender + Education + GDP_PC + (1 | ProvinceNumber), data = df_PANA)
+model_Negative <- lmer(Negative ~ tightness_individual + Age + Gender + Education + GDP_PC + (1 | ProvinceNumber), data = df_PANA)
+
+
+```
+
+```{r}
+library(sjPlot)
+library(htmltools)
+
+
+# 保存结果，生成 HTML 文件
+tab_model(model_GovernenmentIntervention, model_LGBTTolerance, model_ReligiousActivity,
+          model_Openness, model_Agreeableness, model_Extraversion, model_Neuroticism, model_conscientiousness,
+          model_Self_monitoring, model_Life_satisfaction, model_PA, model_Negative,
+          show.ci = FALSE, show.se = TRUE,
+          file = "model_results.html")
+
+```
+
+```{r}
+# 安装并加载 writexl 包
+library(writexl)
+
+# 创建一个列表，保存每个模型的结果为数据框
+model_summaries <- list(
+  GovernenmentIntervention = as.data.frame(summary(model_GovernenmentIntervention)$coefficients),
+  LGBTTolerance = as.data.frame(summary(model_LGBTTolerance)$coefficients),
+  ReligiousActivity = as.data.frame(summary(model_ReligiousActivity)$coefficients),
+  Openness = as.data.frame(summary(model_Openness)$coefficients),
+  Agreeableness = as.data.frame(summary(model_Agreeableness)$coefficients),
+  Extraversion = as.data.frame(summary(model_Extraversion)$coefficients),
+  Neuroticism = as.data.frame(summary(model_Neuroticism)$coefficients),
+  Conscientiousness = as.data.frame(summary(model_conscientiousness)$coefficients),
+  Self_monitoring = as.data.frame(summary(model_Self_monitoring)$coefficients),
+  Life_satisfaction = as.data.frame(summary(model_Life_satisfaction)$coefficients),
+  PA = as.data.frame(summary(model_PA)$coefficients),
+  Negative = as.data.frame(summary(model_Negative)$coefficients)
+)
+
+# 将模型结果写入 Excel 文件，每个模型结果存储在单独的工作表中
+write_xlsx(model_summaries, path = "model_results.xlsx")
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
